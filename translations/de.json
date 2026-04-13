@@ -26,8 +26,16 @@
                     "enable_parameter_configuration": "Fortgeschritten: Berechtigungen erhöhen",
                     "host": "Host",
                     "port": "Port",
+                    "sensor_profile": "Sensorprofil",
                     "slave_ids": "Slave-IDs: AUTO für automatische Entdeckung, sonst eine kommaseparierte Liste"
                 }
+            },
+            "setup_sensor_profile_custom": {
+                "data": {
+                    "sensor_groups": "Sensorgruppen"
+                },
+                "description": "Waehlen Sie aus, welche Sensorgruppen im benutzerdefinierten Profil aktiv sein sollen.",
+                "title": "Benutzerdefinierte Sensorgruppen"
             },
             "setup_serial": {
                 "data": {

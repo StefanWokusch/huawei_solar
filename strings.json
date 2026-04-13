@@ -26,8 +26,16 @@
                     "enable_parameter_configuration": "Advanced: elevate permissions",
                     "host": "Host",
                     "port": "Port",
+                    "sensor_profile": "Sensor profile",
                     "slave_ids": "Slave IDs: AUTO for auto-discovery, otherwise a comma separated list"
                 }
+            },
+            "setup_sensor_profile_custom": {
+                "data": {
+                    "sensor_groups": "Sensor groups"
+                },
+                "description": "Select which groups should be enabled for custom profile mode.",
+                "title": "Custom Sensor Groups"
             },
             "setup_serial": {
                 "data": {

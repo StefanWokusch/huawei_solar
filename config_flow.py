@@ -11,9 +11,7 @@ from huawei_solar import (
     HuaweiSolarException,
     InvalidCredentials,
     ReadException,
-    create_device_instance,
     create_rtu_client,
-    create_sub_device_instance,
     create_tcp_client,
     get_device_infos,
 )
@@ -36,11 +34,25 @@ import homeassistant.helpers.config_validation as cv
 
 from .const import (
     CONF_ENABLE_PARAMETER_CONFIGURATION,
+    CONF_SENSOR_GROUPS,
+    CONF_SENSOR_PROFILE,
     CONF_SLAVE_IDS,
     DEFAULT_PORT,
     DEFAULT_SERIAL_SLAVE_ID,
     DEFAULT_USERNAME,
     DOMAIN,
+)
+from .device_factory import (
+    create_device_instance_resilient,
+    create_sub_device_instance_resilient,
+)
+from .profiles import (
+    ALL_SENSOR_GROUPS,
+    SENSOR_GROUP_OPTIONS,
+    SENSOR_PROFILE_CUSTOM,
+    SENSOR_PROFILE_NORMAL,
+    SENSOR_PROFILE_OPTIONS,
+    should_use_minimal_device_init,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -56,7 +68,7 @@ async def validate_serial_setup(port: str, unit_ids: list[int]) -> dict[str, Any
     )
     try:
         await client.connect()
-        device = await create_device_instance(client)
+        device = await create_device_instance_resilient(client, prefer_minimal=True)
 
         _LOGGER.info(
             "Successfully connected to device %s %s with SN %s",
@@ -73,7 +85,11 @@ async def validate_serial_setup(port: str, unit_ids: list[int]) -> dict[str, Any
         # Also validate the other slave-ids
         for slave_id in unit_ids[1:]:
             try:
-                slave_bridge = await create_sub_device_instance(device, slave_id)
+                slave_bridge = await create_sub_device_instance_resilient(
+                    device,
+                    slave_id,
+                    prefer_minimal=True,
+                )
 
                 _LOGGER.info(
                     "Successfully connected to sub device %s with ID %s: %s with SN %s",
@@ -99,6 +115,7 @@ async def validate_network_setup_auto_slave_discovery(
     host: str,
     port: int,
     elevated_permissions: bool,
+    prefer_minimal_device_init: bool,
 ) -> dict[str, Any]:
     """Validate that we can connect to the device via the provided host and port. Try to autodiscover the slave ids."""
 
@@ -128,7 +145,10 @@ async def validate_network_setup_auto_slave_discovery(
             raise DeviceException("Primary device has no device_id")
 
         # we assume the first device is the primary device
-        device = await create_device_instance(client.for_unit_id(device_info.device_id))
+        device = await create_device_instance_resilient(
+            client.for_unit_id(device_info.device_id),
+            prefer_minimal=prefer_minimal_device_init,
+        )
 
         _LOGGER.info(
             "Successfully connected to device with ID %s: %s %s with SN %s",
@@ -166,8 +186,10 @@ async def validate_network_setup_auto_slave_discovery(
                 device_info.software_version,
             )
             try:
-                sub_device = await create_sub_device_instance(
-                    device, device_info.device_id
+                sub_device = await create_sub_device_instance_resilient(
+                    device,
+                    device_info.device_id,
+                    prefer_minimal=prefer_minimal_device_init,
                 )
 
                 _LOGGER.info(
@@ -204,6 +226,7 @@ async def validate_network_setup(
     port: int,
     unit_ids: list[int],
     elevated_permissions: bool,
+    prefer_minimal_device_init: bool,
 ) -> dict[str, Any]:
     """Validate the user input allows us to connect.
 
@@ -216,7 +239,10 @@ async def validate_network_setup(
     )
     try:
         await client.connect()
-        device = await create_device_instance(client)
+        device = await create_device_instance_resilient(
+            client,
+            prefer_minimal=prefer_minimal_device_init,
+        )
 
         _LOGGER.info(
             "Successfully connected to device %s %s with SN %s",
@@ -235,7 +261,11 @@ async def validate_network_setup(
         # Also validate the other slave-ids
         for unit_id in unit_ids[1:]:
             try:
-                sub_device = await create_sub_device_instance(device, unit_id)
+                sub_device = await create_sub_device_instance_resilient(
+                    device,
+                    unit_id,
+                    prefer_minimal=prefer_minimal_device_init,
+                )
 
                 _LOGGER.info(
                     "Successfully connected to sub device %s %s: %s with SN %s",
@@ -270,6 +300,7 @@ async def validate_network_setup_login(
     password: str,
 ) -> bool:
     """Verify the installer username/password and test if it can perform a write-operation."""
+    bridge = None
     client = create_tcp_client(
         host=host,
         port=port,
@@ -278,7 +309,7 @@ async def validate_network_setup_login(
     try:
         # these parameters have already been tested in validate_input, so this should work fine!
         await client.connect()
-        bridge = await create_device_instance(client)
+        bridge = await create_device_instance_resilient(client, prefer_minimal=True)
 
         assert isinstance(bridge, HuaweiSolarDeviceWithLogin)
 
@@ -317,6 +348,9 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     _password: str | None = None
 
     _elevated_permissions = False
+    _sensor_profile = SENSOR_PROFILE_NORMAL
+    _sensor_groups: list[str] | None = None
+    _pending_network_input: dict[str, Any] | None = None
 
     # Only used in reauth flows:
     _reauth_entry: config_entries.ConfigEntry | None = None
@@ -354,6 +388,12 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self._elevated_permissions = entry_data.get(
             CONF_ENABLE_PARAMETER_CONFIGURATION, False
         )
+        self._sensor_profile = entry_data.get(CONF_SENSOR_PROFILE, SENSOR_PROFILE_NORMAL)
+        stored_groups = entry_data.get(CONF_SENSOR_GROUPS)
+        if isinstance(stored_groups, list):
+            self._sensor_groups = [group for group in stored_groups if group in SENSOR_GROUP_OPTIONS]
+        else:
+            self._sensor_groups = None
 
     async def async_step_reconfigure(
         self, user_input: dict[str, Any] | None = None
@@ -527,76 +567,22 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         errors = {}
 
         if user_input is not None:
-            self._host = user_input[CONF_HOST]
-            assert self._host is not None
-            self._port = user_input[CONF_PORT]
-            assert self._port is not None
-            self._elevated_permissions = user_input[CONF_ENABLE_PARAMETER_CONFIGURATION]
+            self._sensor_profile = user_input[CONF_SENSOR_PROFILE]
+            if self._sensor_profile != SENSOR_PROFILE_CUSTOM:
+                self._sensor_groups = None
 
-            info = None
-            if user_input[CONF_SLAVE_IDS].lower() == "auto":
-                try:
-                    info = await validate_network_setup_auto_slave_discovery(
-                        host=self._host,
-                        port=self._port,
-                        elevated_permissions=self._elevated_permissions,
-                    )
-                    self._slave_ids = info.pop("slave_ids")
+            if self._sensor_profile == SENSOR_PROFILE_CUSTOM and self._sensor_groups is None:
+                self._pending_network_input = dict(user_input)
+                return await self.async_step_setup_sensor_profile_custom()
 
-                except (ConnectionException, ModbusConnectionError):
-                    errors["base"] = "cannot_connect"
-                except DeviceException:
-                    errors["base"] = "slave_cannot_connect"
-                except ReadException:
-                    _LOGGER.exception("Read exception while connecting via TCP")
-                    errors["base"] = "read_error"
-                except Exception:  # allowed in config flow
-                    _LOGGER.exception("Unexpected exception while connecting via TCP")
-                    errors["base"] = "unknown"
-            else:
-                try:
-                    self._slave_ids = list(
-                        map(int, user_input[CONF_SLAVE_IDS].split(","))
-                    )
-                except ValueError:
-                    errors["base"] = "invalid_slave_ids"
-                else:
-                    try:
-                        info = await validate_network_setup(
-                            host=self._host,
-                            port=self._port,
-                            unit_ids=self._slave_ids,
-                            elevated_permissions=self._elevated_permissions,
-                        )
-
-                    except (ConnectionException, ModbusConnectionError):
-                        errors["base"] = "cannot_connect"
-                    except DeviceException:
-                        errors["base"] = "slave_cannot_connect"
-                    except ReadException:
-                        _LOGGER.exception("Read exception while connecting via TCP")
-                        errors["base"] = "read_error"
-                    except Exception:  # allowed in config flow
-                        _LOGGER.exception(
-                            "Unexpected exception while connecting via TCP"
-                        )
-                        errors["base"] = "unknown"
-
-            # info will be set when we successfully connected to the inverter
+            info, errors = await self._validate_network_input(user_input)
             if info:
-                # Check if we need to ask for the login details
-                if self._elevated_permissions and info["has_write_permission"] is False:
-                    self.context["title_placeholders"] = {"name": info["model_name"]}
-                    self._inverter_info = info
-                    return await self.async_step_network_login()
+                return await self._handle_validated_network_info(info)
 
-                # In case of a reconfigure, the user can have unchecked the elevated permissions checkbox
-                self._username = None
-                self._password = None
+        return self._show_setup_network_form(errors)
 
-                # Otherwise, we can directly create the device entry!
-                return await self._create_or_update_entry(info)
-
+    def _show_setup_network_form(self, errors: dict[str, str]) -> ConfigFlowResult:
+        """Show the network setup form."""
         return self.async_show_form(
             step_id="setup_network",
             data_schema=vol.Schema(
@@ -615,10 +601,142 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         CONF_ENABLE_PARAMETER_CONFIGURATION,
                         default=self._elevated_permissions,
                     ): bool,
+                    vol.Required(
+                        CONF_SENSOR_PROFILE,
+                        default=self._sensor_profile,
+                    ): vol.In(SENSOR_PROFILE_OPTIONS),
                 }
             ),
             errors=errors,
         )
+
+    async def async_step_setup_sensor_profile_custom(
+        self,
+        user_input: dict[str, Any] | None = None,
+    ) -> ConfigFlowResult:
+        """Configure custom sensor groups for custom profile mode."""
+        errors = {}
+
+        if user_input is not None:
+            selected_groups = user_input.get(CONF_SENSOR_GROUPS)
+            if isinstance(selected_groups, (list, set, tuple)):
+                self._sensor_groups = [
+                    group for group in selected_groups if group in SENSOR_GROUP_OPTIONS
+                ]
+            else:
+                self._sensor_groups = list(ALL_SENSOR_GROUPS)
+
+            pending_input = self._pending_network_input
+            self._pending_network_input = None
+            if pending_input:
+                info, errors = await self._validate_network_input(pending_input)
+                if info:
+                    return await self._handle_validated_network_info(info)
+                if errors:
+                    return self._show_setup_network_form(errors)
+
+        return self.async_show_form(
+            step_id="setup_sensor_profile_custom",
+            data_schema=vol.Schema(
+                {
+                    vol.Required(
+                        CONF_SENSOR_GROUPS,
+                        default=self._sensor_groups
+                        if self._sensor_groups is not None
+                        else list(ALL_SENSOR_GROUPS),
+                    ): cv.multi_select(SENSOR_GROUP_OPTIONS),
+                }
+            ),
+            errors=errors,
+        )
+
+    async def _validate_network_input(
+        self,
+        user_input: dict[str, Any],
+    ) -> tuple[dict[str, Any] | None, dict[str, str]]:
+        """Validate network parameters and return inverter info + errors."""
+        errors: dict[str, str] = {}
+
+        self._host = user_input[CONF_HOST]
+        assert self._host is not None
+        self._port = user_input[CONF_PORT]
+        assert self._port is not None
+        self._elevated_permissions = user_input[CONF_ENABLE_PARAMETER_CONFIGURATION]
+
+        prefer_minimal_device_init = should_use_minimal_device_init(
+            {
+                CONF_SENSOR_PROFILE: self._sensor_profile,
+                CONF_SENSOR_GROUPS: self._sensor_groups,
+            },
+        )
+
+        info = None
+        if user_input[CONF_SLAVE_IDS].lower() == "auto":
+            try:
+                info = await validate_network_setup_auto_slave_discovery(
+                    host=self._host,
+                    port=self._port,
+                    elevated_permissions=self._elevated_permissions,
+                    prefer_minimal_device_init=prefer_minimal_device_init,
+                )
+                self._slave_ids = info.pop("slave_ids")
+
+            except (ConnectionException, ModbusConnectionError):
+                errors["base"] = "cannot_connect"
+            except DeviceException:
+                errors["base"] = "slave_cannot_connect"
+            except ReadException:
+                _LOGGER.exception("Read exception while connecting via TCP")
+                errors["base"] = "read_error"
+            except Exception:  # allowed in config flow
+                _LOGGER.exception("Unexpected exception while connecting via TCP")
+                errors["base"] = "unknown"
+        else:
+            try:
+                self._slave_ids = list(
+                    map(int, user_input[CONF_SLAVE_IDS].split(","))
+                )
+            except ValueError:
+                errors["base"] = "invalid_slave_ids"
+            else:
+                try:
+                    info = await validate_network_setup(
+                        host=self._host,
+                        port=self._port,
+                        unit_ids=self._slave_ids,
+                        elevated_permissions=self._elevated_permissions,
+                        prefer_minimal_device_init=prefer_minimal_device_init,
+                    )
+                except (ConnectionException, ModbusConnectionError):
+                    errors["base"] = "cannot_connect"
+                except DeviceException:
+                    errors["base"] = "slave_cannot_connect"
+                except ReadException:
+                    _LOGGER.exception("Read exception while connecting via TCP")
+                    errors["base"] = "read_error"
+                except Exception:  # allowed in config flow
+                    _LOGGER.exception(
+                        "Unexpected exception while connecting via TCP"
+                    )
+                    errors["base"] = "unknown"
+
+        return info, errors
+
+    async def _handle_validated_network_info(
+        self,
+        info: dict[str, Any],
+    ) -> ConfigFlowResult:
+        """Handle a successful network validation result."""
+        if self._elevated_permissions and info["has_write_permission"] is False:
+            self.context["title_placeholders"] = {"name": info["model_name"]}
+            self._inverter_info = info
+            return await self.async_step_network_login()
+
+        # In case of a reconfigure, the user can have unchecked elevated permissions.
+        self._username = None
+        self._password = None
+
+        return await self._create_or_update_entry(info)
 
     async def async_step_network_login(
         self, user_input: dict[str, Any] | None = None
@@ -692,6 +810,10 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             CONF_ENABLE_PARAMETER_CONFIGURATION: self._elevated_permissions,
             CONF_USERNAME: self._username,
             CONF_PASSWORD: self._password,
+            CONF_SENSOR_PROFILE: self._sensor_profile,
+            CONF_SENSOR_GROUPS: self._sensor_groups
+            if self._sensor_profile == SENSOR_PROFILE_CUSTOM
+            else None,
         }
 
         if self._reauth_entry:

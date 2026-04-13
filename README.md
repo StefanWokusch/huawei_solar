@@ -92,6 +92,10 @@ repository into the `custom_components/huawei_solar` directory
    - The port is either `502` or `6607`.
    - When connecting to the inverter AP the host IP is typically `192.168.200.1` and the slave id is typically `0`.
    - When connecting to an SDongle, the slave id is typically `1`. Make sure to give this device a fixed IP!
+   - `Sensor profile` controls which entity groups are created:
+     - `Minimum`: only stable core values (PV, meter and battery basics)
+     - `Normal`: recommended default for daily use
+     - `Custom`: choose groups manually (for example disable optimizer groups)
 
    Checking the `Advanced: elevate permissions` checkbox will:
    - give you access to optimizer data

@@ -1,12 +1,12 @@
 {
     "domain": "huawei_solar",
-    "name": "Huawei Solar",
+    "name": "Huawei Solar_SW",
     "after_dependencies": [
         "usb"
     ],
     "config_flow": true,
-    "documentation": "https://github.com/wlcrs/huawei_solar/wiki",
-    "issue_tracker": "https://github.com/wlcrs/huawei_solar/issues",
+    "documentation": "https://github.com/StefanWokusch/huawei_solar/wiki",
+    "issue_tracker": "https://github.com/StefanWokusch/huawei_solar/issues",
     "requirements": [
         "huawei-solar>=3.0.0b2"
     ],
@@ -14,7 +14,7 @@
         "@wlcrs"
     ],
     "iot_class": "local_polling",
-    "version": "2.0.0b5",
+    "version": "2.0.0b5.post1",
     "loggers": [
         "huawei_solar",
         "tmodbus"

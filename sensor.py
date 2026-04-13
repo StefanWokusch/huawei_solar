@@ -46,6 +46,18 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DATA_DEVICE_DATAS
+from .profiles import (
+    SENSOR_GROUP_BATTERY_BASIC,
+    SENSOR_GROUP_BATTERY_DETAIL,
+    SENSOR_GROUP_INVERTER_CORE,
+    SENSOR_GROUP_INVERTER_DIAGNOSTICS,
+    SENSOR_GROUP_METER_ADVANCED,
+    SENSOR_GROUP_METER_BASIC,
+    SENSOR_GROUP_OPTIMIZER_DETAIL,
+    SENSOR_GROUP_OPTIMIZER_SUMMARY,
+    SENSOR_GROUP_PV_STRINGS,
+    get_selected_sensor_groups,
+)
 from .types import (
     HuaweiSolarConfigEntry,
     HuaweiSolarDeviceData,
@@ -1103,21 +1115,81 @@ BATTERY_TEMPLATE_SENSOR_DESCRIPTIONS: tuple[BatteryTemplateEntityDescription, ..
 )
 
 
-async def create_sun2000_entities(ucs: HuaweiSolarInverterData) -> list[SensorEntity]:
+INVERTER_CORE_REGISTER_NAMES = {
+    rn.INPUT_POWER,
+    rn.ACTIVE_POWER,
+    rn.ACTIVE_POWER_FAST,
+    rn.ACCUMULATED_YIELD_ENERGY,
+    rn.DAILY_YIELD_ENERGY,
+    rn.MONTHLY_YIELD_ENERGY,
+    rn.YEARLY_YIELD_ENERGY,
+}
+
+METER_BASIC_REGISTER_NAMES = {
+    rn.POWER_METER_ACTIVE_POWER,
+    rn.GRID_EXPORTED_ENERGY,
+    rn.GRID_ACCUMULATED_ENERGY,
+}
+
+BATTERY_BASIC_REGISTER_NAMES = {
+    rn.STORAGE_STATE_OF_CAPACITY,
+    rn.STORAGE_CHARGE_DISCHARGE_POWER,
+    rn.STORAGE_RUNNING_STATUS,
+}
+
+
+def _base_key(key: str) -> str:
+    return key.split("#")[0]
+
+
+def _filter_descriptions_by_base_register(
+    descriptions: tuple[HuaweiSolarSensorEntityDescription, ...],
+    allowed_register_names: set[str],
+) -> list[HuaweiSolarSensorEntityDescription]:
+    return [
+        description
+        for description in descriptions
+        if _base_key(description.key) in allowed_register_names
+    ]
+
+
+def _filter_descriptions_excluding_base_register(
+    descriptions: tuple[HuaweiSolarSensorEntityDescription, ...],
+    excluded_register_names: set[str],
+) -> list[HuaweiSolarSensorEntityDescription]:
+    return [
+        description
+        for description in descriptions
+        if _base_key(description.key) not in excluded_register_names
+    ]
+
+
+async def create_sun2000_entities(
+    ucs: HuaweiSolarInverterData,
+    selected_sensor_groups: set[str],
+) -> list[SensorEntity]:
     """Create SUN2000 sensor entities."""
     entities_to_add: list[SensorEntity] = []
 
-    entities_to_add.extend(
-        HuaweiSolarSensorEntity(
-            ucs.update_coordinator,
-            entity_description,
-            ucs.device_info,
+    inverter_descriptions: list[HuaweiSolarSensorEntityDescription] = []
+    if SENSOR_GROUP_INVERTER_CORE in selected_sensor_groups:
+        inverter_descriptions.extend(
+            _filter_descriptions_by_base_register(
+                INVERTER_SENSOR_DESCRIPTIONS,
+                INVERTER_CORE_REGISTER_NAMES,
+            )
         )
-        for entity_description in INVERTER_SENSOR_DESCRIPTIONS
-    )
-    entities_to_add.append(
-        HuaweiSolarAlarmSensorEntity(ucs.update_coordinator, ucs.device_info)
-    )
+
+    if SENSOR_GROUP_INVERTER_DIAGNOSTICS in selected_sensor_groups:
+        inverter_descriptions.extend(
+            _filter_descriptions_excluding_base_register(
+                INVERTER_SENSOR_DESCRIPTIONS,
+                INVERTER_CORE_REGISTER_NAMES,
+            )
+        )
+        entities_to_add.append(
+            HuaweiSolarAlarmSensorEntity(ucs.update_coordinator, ucs.device_info)
+        )
 
     entities_to_add.extend(
         HuaweiSolarSensorEntity(
@@ -1125,10 +1197,20 @@ async def create_sun2000_entities(ucs: HuaweiSolarInverterData) -> list[SensorEn
             entity_description,
             ucs.device_info,
         )
-        for entity_description in get_pv_entity_descriptions(ucs.device.pv_string_count)
+        for entity_description in inverter_descriptions
     )
 
-    if ucs.device.has_optimizers:
+    if SENSOR_GROUP_PV_STRINGS in selected_sensor_groups:
+        entities_to_add.extend(
+            HuaweiSolarSensorEntity(
+                ucs.update_coordinator,
+                entity_description,
+                ucs.device_info,
+            )
+            for entity_description in get_pv_entity_descriptions(ucs.device.pv_string_count)
+        )
+
+    if SENSOR_GROUP_OPTIMIZER_SUMMARY in selected_sensor_groups:
         entities_to_add.extend(
             HuaweiSolarSensorEntity(
                 ucs.update_coordinator,
@@ -1141,27 +1223,58 @@ async def create_sun2000_entities(ucs: HuaweiSolarInverterData) -> list[SensorEn
     if ucs.device.power_meter_type == rv.MeterType.SINGLE_PHASE:
         assert ucs.power_meter_update_coordinator
         assert ucs.power_meter
+        meter_descriptions = []
+        if SENSOR_GROUP_METER_BASIC in selected_sensor_groups:
+            meter_descriptions.extend(
+                _filter_descriptions_by_base_register(
+                    SINGLE_PHASE_METER_ENTITY_DESCRIPTIONS,
+                    METER_BASIC_REGISTER_NAMES,
+                )
+            )
+        if SENSOR_GROUP_METER_ADVANCED in selected_sensor_groups:
+            meter_descriptions.extend(
+                _filter_descriptions_excluding_base_register(
+                    SINGLE_PHASE_METER_ENTITY_DESCRIPTIONS,
+                    METER_BASIC_REGISTER_NAMES,
+                )
+            )
         entities_to_add.extend(
             HuaweiSolarSensorEntity(
                 ucs.power_meter_update_coordinator, entity_description, ucs.power_meter
             )
-            for entity_description in SINGLE_PHASE_METER_ENTITY_DESCRIPTIONS
+            for entity_description in meter_descriptions
         )
 
     elif ucs.device.power_meter_type == rv.MeterType.THREE_PHASE:
         assert ucs.power_meter_update_coordinator
         assert ucs.power_meter
+        meter_descriptions = []
+        if SENSOR_GROUP_METER_BASIC in selected_sensor_groups:
+            meter_descriptions.extend(
+                _filter_descriptions_by_base_register(
+                    THREE_PHASE_METER_ENTITY_DESCRIPTIONS,
+                    METER_BASIC_REGISTER_NAMES,
+                )
+            )
+        if SENSOR_GROUP_METER_ADVANCED in selected_sensor_groups:
+            meter_descriptions.extend(
+                _filter_descriptions_excluding_base_register(
+                    THREE_PHASE_METER_ENTITY_DESCRIPTIONS,
+                    METER_BASIC_REGISTER_NAMES,
+                )
+            )
         entities_to_add.extend(
             HuaweiSolarSensorEntity(
                 ucs.power_meter_update_coordinator, entity_description, ucs.power_meter
             )
-            for entity_description in THREE_PHASE_METER_ENTITY_DESCRIPTIONS
+            for entity_description in meter_descriptions
         )
 
     if (
         not isinstance(ucs.device.primary_device, EMMADevice)
         and await ucs.device.has_write_permission()
         and ucs.configuration_update_coordinator
+        and SENSOR_GROUP_INVERTER_DIAGNOSTICS in selected_sensor_groups
     ):
         entities_to_add.append(
             HuaweiSolarActivePowerControlModeEntity(
@@ -1175,16 +1288,35 @@ async def create_sun2000_entities(ucs: HuaweiSolarInverterData) -> list[SensorEn
         assert ucs.energy_storage_update_coordinator
         assert ucs.connected_energy_storage
 
+        battery_descriptions: list[HuaweiSolarSensorEntityDescription] = []
+        if SENSOR_GROUP_BATTERY_BASIC in selected_sensor_groups:
+            battery_descriptions.extend(
+                _filter_descriptions_by_base_register(
+                    BATTERIES_SENSOR_DESCRIPTIONS,
+                    BATTERY_BASIC_REGISTER_NAMES,
+                )
+            )
+        if SENSOR_GROUP_BATTERY_DETAIL in selected_sensor_groups:
+            battery_descriptions.extend(
+                _filter_descriptions_excluding_base_register(
+                    BATTERIES_SENSOR_DESCRIPTIONS,
+                    BATTERY_BASIC_REGISTER_NAMES,
+                )
+            )
+
         entities_to_add.extend(
             HuaweiSolarSensorEntity(
                 ucs.energy_storage_update_coordinator,
                 entity_description,
                 ucs.connected_energy_storage,
             )
-            for entity_description in BATTERIES_SENSOR_DESCRIPTIONS
+            for entity_description in battery_descriptions
         )
 
-        if ucs.configuration_update_coordinator:
+        if (
+            ucs.configuration_update_coordinator
+            and SENSOR_GROUP_BATTERY_DETAIL in selected_sensor_groups
+        ):
             if ucs.device.battery_type == rv.StorageProductModel.HUAWEI_LUNA2000:
                 entities_to_add.append(
                     HuaweiSolarTOUSensorEntity(
@@ -1218,7 +1350,7 @@ async def create_sun2000_entities(ucs: HuaweiSolarInverterData) -> list[SensorEn
                     )
                 )
 
-        if ucs.battery_1:
+        if ucs.battery_1 and SENSOR_GROUP_BATTERY_DETAIL in selected_sensor_groups:
             entities_to_add.extend(
                 HuaweiSolarSensorEntity(
                     ucs.energy_storage_update_coordinator,
@@ -1238,7 +1370,7 @@ async def create_sun2000_entities(ucs: HuaweiSolarInverterData) -> list[SensorEn
                 if entity_description_template.battery_1_key
             )
 
-        if ucs.battery_2:
+        if ucs.battery_2 and SENSOR_GROUP_BATTERY_DETAIL in selected_sensor_groups:
             entities_to_add.extend(
                 HuaweiSolarSensorEntity(
                     ucs.energy_storage_update_coordinator,
@@ -1257,7 +1389,10 @@ async def create_sun2000_entities(ucs: HuaweiSolarInverterData) -> list[SensorEn
                 for entity_description_template in BATTERY_TEMPLATE_SENSOR_DESCRIPTIONS
                 if entity_description_template.battery_2_key
             )
-    if ucs.optimizer_update_coordinator:
+    if (
+        SENSOR_GROUP_OPTIMIZER_DETAIL in selected_sensor_groups
+        and ucs.optimizer_update_coordinator
+    ):
         optimizer_device_infos = ucs.optimizer_update_coordinator.optimizer_device_infos
 
         entities_to_add.extend(
@@ -2038,11 +2173,14 @@ async def async_setup_entry(
 ) -> None:
     """Add Huawei Solar entry."""
     device_datas: list[HuaweiSolarDeviceData] = entry.runtime_data[DATA_DEVICE_DATAS]
+    selected_sensor_groups = get_selected_sensor_groups(entry.data)
 
     entities_to_add = []
     for ucs in device_datas:
         if isinstance(ucs, HuaweiSolarInverterData):
-            entities_to_add.extend(await create_sun2000_entities(ucs))
+            entities_to_add.extend(
+                await create_sun2000_entities(ucs, selected_sensor_groups)
+            )
         elif isinstance(ucs.device, EMMADevice):
             entities_to_add.extend(create_emma_entities(ucs))
         elif isinstance(ucs.device, SChargerDevice):

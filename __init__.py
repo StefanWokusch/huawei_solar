@@ -10,9 +10,7 @@ from huawei_solar import (
     SDongleDevice,
     SmartLoggerDevice,
     SUN2000Device,
-    create_device_instance,
     create_rtu_client,
-    create_sub_device_instance,
     create_tcp_client,
     register_values as rv,
 )
@@ -43,6 +41,15 @@ from .const import (
     OPTIMIZER_UPDATE_INTERVAL,
     POWER_METER_UPDATE_INTERVAL,
 )
+from .device_factory import (
+    create_device_instance_resilient,
+    create_sub_device_instance_resilient,
+)
+from .profiles import (
+    SENSOR_GROUP_OPTIMIZER_DETAIL,
+    get_selected_sensor_groups,
+    should_use_minimal_device_init,
+)
 from .services import async_setup_services
 from .types import (
     HuaweiSolarConfigEntry,
@@ -69,6 +76,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: HuaweiSolarConfigEntry) 
     """Set up Huawei Solar from a config entry."""
 
     primary_device = None
+    prefer_minimal_device_init = should_use_minimal_device_init(entry.data)
     try:
         # Multiple inverters can be connected to each other via a daisy chain,
         # via an internal modbus-network (ie. not the same modbus network that we are
@@ -104,7 +112,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: HuaweiSolarConfigEntry) 
                 unit_id=entry.data[CONF_SLAVE_IDS][0],
             )
 
-        primary_device = await create_device_instance(client)
+        primary_device = await create_device_instance_resilient(
+            client,
+            prefer_minimal=prefer_minimal_device_init,
+        )
 
         if entry.data.get(CONF_ENABLE_PARAMETER_CONFIGURATION):
             if (
@@ -128,7 +139,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: HuaweiSolarConfigEntry) 
         device_datas: list[HuaweiSolarDeviceData] = [primary_device_data]
 
         for extra_unit_id in entry.data[CONF_SLAVE_IDS][1:]:
-            sub_device = await create_sub_device_instance(primary_device, extra_unit_id)
+            sub_device = await create_sub_device_instance_resilient(
+                primary_device,
+                extra_unit_id,
+                prefer_minimal=prefer_minimal_device_init,
+            )
             sub_device_data = await _setup_device_data(hass, entry, sub_device)
 
             device_datas.append(sub_device_data)
@@ -189,6 +204,7 @@ async def _setup_inverter_device_data(
     device: SUN2000Device,
     connecting_inverter_device_id: tuple[str, str] | None,
 ) -> HuaweiSolarInverterData:
+    selected_sensor_groups = get_selected_sensor_groups(entry.data)
     device_registry = dr.async_get(hass)
 
     inverter_device_info = DeviceInfo(
@@ -291,10 +307,14 @@ async def _setup_inverter_device_data(
     optimizers_device_infos = {}
     optimizer_update_coordinator = None
 
-    # Add optimizer devices if optimizers are detected
-    if device.has_optimizers and (
+    # Add optimizer devices only when detail optimizer entities are enabled.
+    if (
+        SENSOR_GROUP_OPTIMIZER_DETAIL in selected_sensor_groups
+        and device.has_optimizers
+        and (
         # Optimizers are not accessible when connected through a SmartLogger
         not isinstance(device.primary_device, SmartLoggerDevice)
+        )
     ):
         try:
             optimizer_system_infos = (

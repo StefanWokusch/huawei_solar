@@ -11,6 +11,8 @@ DEFAULT_PASSWORD = "00000a"
 
 CONF_SLAVE_IDS = "slave_ids"
 CONF_ENABLE_PARAMETER_CONFIGURATION = "enable_parameter_configuration"
+CONF_SENSOR_PROFILE = "sensor_profile"
+CONF_SENSOR_GROUPS = "sensor_groups"
 
 DATA_DEVICE_DATAS = "device_datas"
 DATA_UPDATE_COORDINATORS = "update_coordinators"
