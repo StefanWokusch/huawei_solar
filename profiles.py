@@ -8,11 +8,13 @@ from .const import CONF_SENSOR_GROUPS, CONF_SENSOR_PROFILE
 
 SENSOR_PROFILE_MINIMUM = "minimum"
 SENSOR_PROFILE_NORMAL = "normal"
+SENSOR_PROFILE_ALL_VALUES = "all_values"
 SENSOR_PROFILE_CUSTOM = "custom"
 
 SENSOR_PROFILE_OPTIONS = {
     SENSOR_PROFILE_MINIMUM: "Minimum (stable core values)",
     SENSOR_PROFILE_NORMAL: "Normal (recommended)",
+    SENSOR_PROFILE_ALL_VALUES: "All values (full)",
     SENSOR_PROFILE_CUSTOM: "Custom (choose groups)",
 }
 
@@ -56,6 +58,18 @@ DEFAULT_NORMAL_SENSOR_GROUPS: tuple[str, ...] = (
 
 ALL_SENSOR_GROUPS: tuple[str, ...] = tuple(SENSOR_GROUP_OPTIONS.keys())
 
+SENSOR_GROUP_PRESET_MINIMUM = "minimum"
+SENSOR_GROUP_PRESET_NORMAL = "normal"
+SENSOR_GROUP_PRESET_ALL_VALUES = "all_values"
+SENSOR_GROUP_PRESET_MANUAL = "manual"
+
+SENSOR_GROUP_PRESET_OPTIONS = {
+    SENSOR_GROUP_PRESET_MINIMUM: "Minimum",
+    SENSOR_GROUP_PRESET_NORMAL: "Normal",
+    SENSOR_GROUP_PRESET_ALL_VALUES: "All values",
+    SENSOR_GROUP_PRESET_MANUAL: "Manual selection",
+}
+
 
 def sanitize_sensor_groups(
     groups: list[str] | tuple[str, ...] | set[str] | None,
@@ -79,14 +93,41 @@ def get_selected_sensor_groups(config: Mapping[str, Any]) -> set[str]:
             return sanitize_sensor_groups(custom_groups)
         return set(ALL_SENSOR_GROUPS)
 
+    if profile == SENSOR_PROFILE_ALL_VALUES:
+        return set(ALL_SENSOR_GROUPS)
+
     return set(DEFAULT_NORMAL_SENSOR_GROUPS)
 
 
 def should_use_minimal_device_init(config: Mapping[str, Any]) -> bool:
     """Use full SUN2000 discovery only when optimizer detail entities are requested."""
     profile = config.get(CONF_SENSOR_PROFILE, SENSOR_PROFILE_NORMAL)
-    if profile != SENSOR_PROFILE_CUSTOM:
+    if profile in (SENSOR_PROFILE_MINIMUM, SENSOR_PROFILE_NORMAL):
         return True
+    if profile == SENSOR_PROFILE_ALL_VALUES:
+        return False
 
     custom_groups = get_selected_sensor_groups(config)
     return SENSOR_GROUP_OPTIMIZER_DETAIL not in custom_groups
+
+
+def get_groups_for_preset(preset: str) -> set[str]:
+    """Return sensor groups for a custom preset option."""
+    if preset == SENSOR_GROUP_PRESET_MINIMUM:
+        return set(DEFAULT_MINIMUM_SENSOR_GROUPS)
+    if preset == SENSOR_GROUP_PRESET_NORMAL:
+        return set(DEFAULT_NORMAL_SENSOR_GROUPS)
+    if preset == SENSOR_GROUP_PRESET_ALL_VALUES:
+        return set(ALL_SENSOR_GROUPS)
+    return set()
+
+
+def get_matching_preset_for_groups(groups: set[str]) -> str:
+    """Resolve preset name for known group combinations."""
+    if groups == set(DEFAULT_MINIMUM_SENSOR_GROUPS):
+        return SENSOR_GROUP_PRESET_MINIMUM
+    if groups == set(DEFAULT_NORMAL_SENSOR_GROUPS):
+        return SENSOR_GROUP_PRESET_NORMAL
+    if groups == set(ALL_SENSOR_GROUPS):
+        return SENSOR_GROUP_PRESET_ALL_VALUES
+    return SENSOR_GROUP_PRESET_MANUAL

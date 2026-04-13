@@ -32,9 +32,10 @@
             },
             "setup_sensor_profile_custom": {
                 "data": {
+                    "sensor_group_preset": "Schnellauswahl",
                     "sensor_groups": "Sensorgruppen"
                 },
-                "description": "Waehlen Sie aus, welche Sensorgruppen im benutzerdefinierten Profil aktiv sein sollen.",
+                "description": "Waehlen Sie eine Schnellauswahl oder legen Sie die Sensorgruppen im benutzerdefinierten Profil manuell fest.",
                 "title": "Benutzerdefinierte Sensorgruppen"
             },
             "setup_serial": {

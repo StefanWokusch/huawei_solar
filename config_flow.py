@@ -48,16 +48,21 @@ from .device_factory import (
 )
 from .profiles import (
     ALL_SENSOR_GROUPS,
+    SENSOR_GROUP_PRESET_MANUAL,
+    SENSOR_GROUP_PRESET_OPTIONS,
     SENSOR_GROUP_OPTIONS,
     SENSOR_PROFILE_CUSTOM,
     SENSOR_PROFILE_NORMAL,
     SENSOR_PROFILE_OPTIONS,
+    get_groups_for_preset,
+    get_matching_preset_for_groups,
     should_use_minimal_device_init,
 )
 
 _LOGGER = logging.getLogger(__name__)
 
 CONF_MANUAL_PATH = "Enter Manually"
+CONF_SENSOR_GROUP_PRESET = "sensor_group_preset"
 
 
 async def validate_serial_setup(port: str, unit_ids: list[int]) -> dict[str, Any]:
@@ -571,7 +576,7 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             if self._sensor_profile != SENSOR_PROFILE_CUSTOM:
                 self._sensor_groups = None
 
-            if self._sensor_profile == SENSOR_PROFILE_CUSTOM and self._sensor_groups is None:
+            if self._sensor_profile == SENSOR_PROFILE_CUSTOM:
                 self._pending_network_input = dict(user_input)
                 return await self.async_step_setup_sensor_profile_custom()
 
@@ -618,13 +623,26 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         errors = {}
 
         if user_input is not None:
-            selected_groups = user_input.get(CONF_SENSOR_GROUPS)
-            if isinstance(selected_groups, (list, set, tuple)):
-                self._sensor_groups = [
-                    group for group in selected_groups if group in SENSOR_GROUP_OPTIONS
-                ]
+            selected_preset = user_input.get(
+                CONF_SENSOR_GROUP_PRESET,
+                SENSOR_GROUP_PRESET_MANUAL,
+            )
+            if (
+                isinstance(selected_preset, str)
+                and selected_preset in SENSOR_GROUP_PRESET_OPTIONS
+                and selected_preset != SENSOR_GROUP_PRESET_MANUAL
+            ):
+                self._sensor_groups = list(get_groups_for_preset(selected_preset))
             else:
-                self._sensor_groups = list(ALL_SENSOR_GROUPS)
+                selected_groups = user_input.get(CONF_SENSOR_GROUPS)
+                if isinstance(selected_groups, (list, set, tuple)):
+                    self._sensor_groups = [
+                        group
+                        for group in selected_groups
+                        if group in SENSOR_GROUP_OPTIONS
+                    ]
+                else:
+                    self._sensor_groups = list(ALL_SENSOR_GROUPS)
 
             pending_input = self._pending_network_input
             self._pending_network_input = None
@@ -635,15 +653,24 @@ class ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 if errors:
                     return self._show_setup_network_form(errors)
 
+        selected_groups = (
+            self._sensor_groups
+            if self._sensor_groups is not None
+            else list(ALL_SENSOR_GROUPS)
+        )
+        selected_preset = get_matching_preset_for_groups(set(selected_groups))
+
         return self.async_show_form(
             step_id="setup_sensor_profile_custom",
             data_schema=vol.Schema(
                 {
                     vol.Required(
+                        CONF_SENSOR_GROUP_PRESET,
+                        default=selected_preset,
+                    ): vol.In(SENSOR_GROUP_PRESET_OPTIONS),
+                    vol.Required(
                         CONF_SENSOR_GROUPS,
-                        default=self._sensor_groups
-                        if self._sensor_groups is not None
-                        else list(ALL_SENSOR_GROUPS),
+                        default=selected_groups,
                     ): cv.multi_select(SENSOR_GROUP_OPTIONS),
                 }
             ),

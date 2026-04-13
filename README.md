@@ -95,7 +95,8 @@ repository into the `custom_components/huawei_solar` directory
    - `Sensor profile` controls which entity groups are created:
      - `Minimum`: only stable core values (PV, meter and battery basics)
      - `Normal`: recommended default for daily use
-     - `Custom`: choose groups manually (for example disable optimizer groups)
+     - `All values`: full entity set (includes optimizer groups)
+     - `Custom`: choose groups manually, with quick presets for minimum/normal/all values
 
    Checking the `Advanced: elevate permissions` checkbox will:
    - give you access to optimizer data

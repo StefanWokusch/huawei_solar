@@ -32,9 +32,10 @@
             },
             "setup_sensor_profile_custom": {
                 "data": {
+                    "sensor_group_preset": "Quick selection",
                     "sensor_groups": "Sensor groups"
                 },
-                "description": "Select which groups should be enabled for custom profile mode.",
+                "description": "Choose a quick preset or manually select which groups should be enabled for custom profile mode.",
                 "title": "Custom Sensor Groups"
             },
             "setup_serial": {
