@@ -2190,7 +2190,14 @@ async def async_setup_entry(
         elif isinstance(ucs.device, SmartLoggerDevice):
             entities_to_add.extend(create_smartlogger_entities(ucs))
 
-    async_add_entities(entities_to_add, True)
+    # Do not block Home Assistant startup on the first Modbus refresh.
+    #
+    # On SDongle installations with multiple inverters, the initial batched sensor
+    # reads can legitimately take longer than HA's platform setup watchdog. If we
+    # wait here, HA may abandon the sensor platform and leave all inverter sensors
+    # unavailable until the config entry is manually reloaded. Register the
+    # entities first; the coordinators will refresh them on their normal schedule.
+    async_add_entities(entities_to_add, False)
 
 
 class HuaweiSolarSensorEntity(
