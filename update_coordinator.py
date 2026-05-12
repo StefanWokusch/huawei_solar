@@ -19,6 +19,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from .const import OPTIMIZER_UPDATE_TIMEOUT, UPDATE_TIMEOUT
 
 _LOGGER = logging.getLogger(__name__)
+MAX_STALE_DATA_REUSES = 3
 
 
 class HuaweiSolarUpdateCoordinator(
@@ -51,6 +52,7 @@ class HuaweiSolarUpdateCoordinator(
         )
         self.device = device
         self.update_timeout = update_timeout
+        self._stale_data_reuses = 0
 
     async def _async_update_data(self) -> dict[RegisterName, Result[Any]]:
         register_names_set = set(
@@ -58,11 +60,26 @@ class HuaweiSolarUpdateCoordinator(
         )
         try:
             async with asyncio.timeout(self.update_timeout.total_seconds()):
-                return await self.device.batch_update(list(register_names_set))
-        except HuaweiSolarException as err:
+                data = await self.device.batch_update(list(register_names_set))
+        except (HuaweiSolarException, TimeoutError) as err:
+            if self.data and self._stale_data_reuses < MAX_STALE_DATA_REUSES:
+                self._stale_data_reuses += 1
+                _LOGGER.warning(
+                    "Reusing last good %s values after update failure (%s/%s): %s",
+                    self.device.serial_number,
+                    self._stale_data_reuses,
+                    MAX_STALE_DATA_REUSES,
+                    err,
+                )
+                return self.data
+
+            self._stale_data_reuses += 1
             raise UpdateFailed(
                 f"Could not update {self.device.serial_number} values: {err}"
             ) from err
+        else:
+            self._stale_data_reuses = 0
+            return data
 
 
 class HuaweiSolarOptimizerUpdateCoordinator(
